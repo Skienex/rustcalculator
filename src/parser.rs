@@ -1,3 +1,5 @@
+use crate::error::{Error, Result};
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Token {
     Num(f64),
@@ -56,7 +58,7 @@ impl Expr {
     }
 }
 
-pub fn parse(input: &str) -> Expr {
+pub fn parse(input: &str) -> Result<Expr> {
     let mut chars = input.chars().peekable();
     let mut tokens = Vec::new();
     while let Some(c) = chars.next() {
@@ -81,7 +83,7 @@ pub fn parse(input: &str) -> Expr {
             }
             'i' => {
                 if chars.next().unwrap() != 'n' || chars.next().unwrap() != 'f' {
-                    panic!("Invalid infinity")
+                    return Err(Error::InvalidIdent());
                 }
                 tokens.push(Token::Num(f64::INFINITY));
             }
@@ -97,17 +99,17 @@ pub fn parse(input: &str) -> Expr {
                     }
                     break;
                 }
-                let num = buf.parse().expect("Invalid number");
+                let Ok(num) = buf.parse() else {
+                    return Err(Error::InvalidNumber(buf));
+                };
                 tokens.push(Token::Num(num));
             }
             c if c.is_whitespace() => {}
-            _ => {
-                panic!("Alarm")
-            }
+            c => return Err(Error::UnexpectedChar(c)),
         }
     }
     tokens.push(Token::Eof);
-    return prat(&tokens);
+    prat(&tokens)
 }
 
 struct State<'a> {
@@ -124,32 +126,32 @@ impl State<'_> {
     }
 }
 
-fn prat(tokens: &[Token]) -> Expr {
+fn prat(tokens: &[Token]) -> Result<Expr> {
     let mut state = State {
         tokens: tokens.iter().peekable(),
     };
     parse_expr(&mut state, &Token::Eof)
 }
 
-fn parse_expr(state: &mut State<'_>, end_token: &Token) -> Expr {
+fn parse_expr(state: &mut State<'_>, end_token: &Token) -> Result<Expr> {
     let next = state.peek();
-    let left = parse_unary(state, next);
+    let left = parse_unary(state, next)?;
     let op = state.peek();
     if &op == end_token {
         state.eat(); // ???
-        return left;
+        return Ok(left);
     }
     if !op.is_binary_op() {
-        panic!("Invalid binary op");
+        return Err(Error::InvalidBinOp());
     }
     parse_binary(state, left, end_token)
 }
 
-fn parse_unary(state: &mut State<'_>, left: Token) -> Expr {
+fn parse_unary(state: &mut State<'_>, left: Token) -> Result<Expr> {
     if left.is_unary_op() {
         state.eat();
         let next = state.peek();
-        return apply_unary(left, parse_unary(state, next));
+        return Ok(apply_unary(left, parse_unary(state, next)?));
     }
     if let Token::LeftParen = left {
         state.eat();
@@ -157,26 +159,30 @@ fn parse_unary(state: &mut State<'_>, left: Token) -> Expr {
     }
     if let Token::Num(value) = left {
         state.eat();
-        return Expr::Num(value);
+        return Ok(Expr::Num(value));
     }
-    panic!("Invalid unary expression");
+    Err(Error::InvalidUnaryOp())
 }
 
-fn parse_binary(state: &mut State<'_>, left: Expr, end_token: &Token) -> Expr {
+fn parse_binary(state: &mut State<'_>, left: Expr, end_token: &Token) -> Result<Expr> {
     let op = state.peek();
     state.eat();
     let next = state.peek();
-    let right = parse_unary(state, next);
+    let right = parse_unary(state, next)?;
     let next = state.peek();
     if &next == end_token {
         state.eat(); // ???
-        return apply_binary(op, left, right);
+        return Ok(apply_binary(op, left, right));
     };
     if !next.is_binary_op() {
-        panic!("Invalid binary op");
+        return Err(Error::InvalidBinOp());
     }
     if op.precedence() < next.precedence() {
-        return apply_binary(op, left, parse_binary(state, right, end_token));
+        return Ok(apply_binary(
+            op,
+            left,
+            parse_binary(state, right, end_token)?,
+        ));
     }
     parse_binary(state, apply_binary(op, left, right), end_token)
 }
